@@ -1,15 +1,71 @@
 services:
+  proxy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+
+  api:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      MONGODB_HOST: mongodb
+      MONGODB_USERNAME: ${MONGODB_USERNAME:?Set MONGODB_USERNAME in .env}
+      MONGODB_PASSWORD: ${MONGODB_PASSWORD:?Set MONGODB_PASSWORD in .env}
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET in .env}
+    expose:
+      - "3000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
   mongodb:
     restart: unless-stopped
-    image: mongo:latest
-    container_name: mongodb
-    ports:
-      - "27017:27017"
+    image: mongo:8.0
     environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: senha123
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USERNAME:?Set MONGODB_USERNAME in .env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:?Set MONGODB_PASSWORD in .env}
     volumes:
       - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --username \"$$MONGO_INITDB_ROOT_USERNAME\" --password \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 })' >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
 volumes:
   mongo-data:
+  caddy-data:
+  caddy-config:

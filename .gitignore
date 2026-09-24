@@ -1,4 +1,6 @@
 node_modules/
-.env
+.env.development
+.env.production
 npm-debug.log*
 *.http
+dist/

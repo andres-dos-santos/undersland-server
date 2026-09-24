@@ -3,8 +3,25 @@ import oauthPlugin from '@fastify/oauth2'
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify'
 import { MongoClient } from 'mongodb'
 
-const defaultMongoUri =
-  'mongodb://admin:senha123@localhost:27017/posts?authSource=admin'
+function getMongoUri() {
+  if (process.env.MONGODB_URI) return process.env.MONGODB_URI
+
+  const username = process.env.MONGODB_USERNAME
+  const password = process.env.MONGODB_PASSWORD
+  const host = process.env.MONGODB_HOST ?? 'localhost'
+
+  if (username && password) {
+    return `mongodb://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:27017/?authSource=admin`
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'MONGODB_URI or MONGODB_USERNAME and MONGODB_PASSWORD are required in production'
+    )
+  }
+
+  return 'mongodb://localhost:27017/posts'
+}
 
 interface BuildAppOptions {
   logger?: boolean
@@ -112,8 +129,7 @@ function getValidSession(cookieHeader: string | undefined, secret: string) {
 
 export async function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({ logger: options.logger ?? true })
-  const mongoUri =
-    options.mongoUri ?? process.env.MONGODB_URI ?? defaultMongoUri
+  const mongoUri = options.mongoUri ?? getMongoUri()
   const databaseName =
     options.databaseName ?? process.env.MONGODB_DATABASE ?? 'posts'
   const mongoClient = options.mongoClient ?? new MongoClient(mongoUri)
