@@ -33,6 +33,12 @@ interface BuildAppOptions {
   googleCallbackUrl?: string
   frontendUrl?: string
   sessionSecret?: string
+  nodeEnv?: string
+  googleAccessTokenProvider?: (
+    request: FastifyRequest,
+    reply: FastifyReply
+  ) => Promise<string>
+  googleProfileProvider?: (accessToken: string) => Promise<GoogleProfile>
 }
 
 interface CreatePostBody {
@@ -147,6 +153,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const googleClientSecret =
     options.googleClientSecret ?? process.env.GOOGLE_CLIENT_SECRET
   const sessionSecret = options.sessionSecret ?? process.env.SESSION_SECRET
+  const isProduction =
+    (options.nodeEnv ?? process.env.NODE_ENV) === 'production'
   const requireAuthentication = async (
     request: FastifyRequest,
     reply: FastifyReply
@@ -183,8 +191,20 @@ export async function buildApp(options: BuildAppOptions = {}) {
       },
       startRedirectPath: '/sign-up',
       callbackUri: callbackUrl,
-      pkce: 'S256'
+      pkce: 'S256',
+      cookie: {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: isProduction,
+        path: '/sign-up/google/callback'
+      }
     })
+
+    const failureRedirect = (errorCode: string) => {
+      const url = new URL('/login', frontendUrl)
+      url.searchParams.set('error', errorCode)
+      return url.toString()
+    }
 
     app.get('/sign-up/google/callback', async (request, reply) => {
       const query = request.query as {
@@ -193,76 +213,95 @@ export async function buildApp(options: BuildAppOptions = {}) {
         error_description?: string
       }
 
-      request.log.info(
-        {
-          hasAuthorizationCode: Boolean(query.code),
-          oauthError: query.error,
-          oauthErrorDescription: query.error_description
-        },
-        'Google OAuth callback received'
-      )
-
-      const { token } =
-        await app.googleOAuth2.getAccessTokenFromAuthorizationCodeFlow(
-          request,
-          reply
+      if (query.error || !query.code) {
+        const temporaryCookieOptions = {
+          httpOnly: true,
+          sameSite: 'lax' as const,
+          secure: isProduction,
+          path: '/sign-up/google/callback'
+        }
+        reply.clearCookie('oauth2-redirect-state', temporaryCookieOptions)
+        reply.clearCookie('oauth2-code-verifier', temporaryCookieOptions)
+        request.log.warn(
+          { errorCode: 'oauth_denied' },
+          'Google OAuth callback failed'
         )
-      const profileResponse = await fetch(
-        'https://openidconnect.googleapis.com/v1/userinfo',
-        { headers: { authorization: `Bearer ${token.access_token}` } }
-      )
-
-      if (!profileResponse.ok) {
-        return reply.status(502).send({ message: 'Could not load Google user' })
+        return reply.redirect(failureRedirect('oauth_denied'))
       }
 
-      const profile = (await profileResponse.json()) as GoogleProfile
+      try {
+        const accessToken = options.googleAccessTokenProvider
+          ? await options.googleAccessTokenProvider(request, reply)
+          : (
+              await app.googleOAuth2.getAccessTokenFromAuthorizationCodeFlow(
+                request,
+                reply
+              )
+            ).token.access_token
+        const profile = options.googleProfileProvider
+          ? await options.googleProfileProvider(accessToken)
+          : await (async () => {
+              const response = await fetch(
+                'https://openidconnect.googleapis.com/v1/userinfo',
+                { headers: { authorization: `Bearer ${accessToken}` } }
+              )
 
-      if (!profile.email_verified) {
-        return reply
-          .status(403)
-          .send({ message: 'Google email is not verified' })
-      }
+              if (!response.ok) throw new Error('Google profile request failed')
+              return (await response.json()) as GoogleProfile
+            })()
 
-      const now = new Date()
-      await database.collection('Users').updateOne(
-        { googleId: profile.sub },
-        {
-          $set: {
-            name: profile.name,
-            email: profile.email.toLowerCase(),
-            picture: profile.picture,
-            updated_at: now
+        if (!profile.email_verified) {
+          request.log.warn(
+            { errorCode: 'email_not_verified' },
+            'Google OAuth callback failed'
+          )
+          return reply.redirect(failureRedirect('email_not_verified'))
+        }
+
+        const now = new Date()
+        await database.collection('Users').updateOne(
+          { googleId: profile.sub },
+          {
+            $set: {
+              name: profile.name,
+              email: profile.email.toLowerCase(),
+              picture: profile.picture,
+              updated_at: now
+            },
+            $setOnInsert: { googleId: profile.sub, created_at: now }
           },
-          $setOnInsert: { googleId: profile.sub, created_at: now }
-        },
-        { upsert: true }
-      )
+          { upsert: true }
+        )
 
-      if (!sessionSecret) {
-        request.log.error('SESSION_SECRET is required to create a session')
-        return reply.status(500).send({ message: 'Session is not configured' })
+        if (!sessionSecret) throw new Error('Session is not configured')
+
+        const sessionPayload = Buffer.from(
+          JSON.stringify({
+            sub: profile.sub,
+            email: profile.email.toLowerCase(),
+            exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30
+          })
+        ).toString('base64url')
+        const sessionSignature = createHmac('sha256', sessionSecret)
+          .update(sessionPayload)
+          .digest('base64url')
+        const productionAttributes = isProduction
+          ? '; Domain=.undersland.com; Secure'
+          : ''
+
+        reply.header(
+          'set-cookie',
+          `understand-session=${sessionPayload}.${sessionSignature}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${productionAttributes}`
+        )
+
+        return reply.redirect(new URL('/', frontendUrl).toString())
+      } catch {
+        request.log.error(
+          { errorCode: 'authentication_failed' },
+          'Google OAuth callback failed'
+        )
+        return reply.redirect(failureRedirect('authentication_failed'))
       }
-
-      const sessionPayload = Buffer.from(
-        JSON.stringify({
-          sub: profile.sub,
-          email: profile.email.toLowerCase(),
-          exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30
-        })
-      ).toString('base64url')
-      const sessionSignature = createHmac('sha256', sessionSecret)
-        .update(sessionPayload)
-        .digest('base64url')
-      const secureCookie =
-        process.env.NODE_ENV === 'production' ? '; Secure' : ''
-
-      reply.header(
-        'set-cookie',
-        `understand-session=${sessionPayload}.${sessionSignature}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${secureCookie}`
-      )
-
-      return reply.redirect(new URL('/', frontendUrl).toString())
     })
   }
 

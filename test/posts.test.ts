@@ -78,6 +78,13 @@ function createMongoClient(
             async insertOne(post: object) {
               insertedPost = post
               return { acknowledged: true, insertedId }
+            },
+            async updateOne() {
+              return {
+                acknowledged: true,
+                matchedCount: 0,
+                upsertedId: insertedId
+              }
             }
           }
         }
@@ -383,6 +390,133 @@ test('GET /sign-up starts Google OAuth', async () => {
   assert.equal(response.statusCode, 302)
   assert.match(response.headers.location ?? '', /accounts\.google\.com/)
   assert.match(response.headers.location ?? '', /client_id=google-client-id/)
+  const oauthCookies = response.headers['set-cookie']
+  const serializedCookies = Array.isArray(oauthCookies)
+    ? oauthCookies.join('\n')
+    : (oauthCookies ?? '')
+  assert.match(serializedCookies, /Path=\/sign-up\/google\/callback/)
+  assert.doesNotMatch(serializedCookies, /Domain=/)
+
+  await app.close()
+})
+
+const googleProfile = {
+  sub: 'google-user-id',
+  name: 'Example User',
+  email: 'USER@example.com',
+  picture: 'https://example.com/avatar.jpg',
+  email_verified: true
+}
+
+async function buildGoogleCallbackApp(nodeEnv: 'development' | 'production') {
+  const mongo = createMongoClient([])
+  const app = await buildApp({
+    logger: false,
+    mongoClient: mongo.client,
+    googleClientId: 'google-client-id',
+    googleClientSecret: 'google-client-secret',
+    frontendUrl:
+      nodeEnv === 'production'
+        ? 'https://www.undersland.com'
+        : 'http://localhost:3000',
+    sessionSecret,
+    nodeEnv,
+    googleAccessTokenProvider: async () => 'test-access-token',
+    googleProfileProvider: async () => googleProfile
+  })
+
+  return { app, mongo }
+}
+
+test('Google callback sets a cross-subdomain production session cookie and redirects home', async () => {
+  const { app } = await buildGoogleCallbackApp('production')
+
+  const response = await app.inject({
+    method: 'GET',
+    url: '/sign-up/google/callback?code=test-code'
+  })
+
+  assert.equal(response.statusCode, 302)
+  assert.equal(response.headers.location, 'https://www.undersland.com/')
+  const cookie = response.headers['set-cookie'] as string
+  assert.match(cookie, /^understand-session=[^.]+\.[^;]+;/)
+  assert.match(cookie, /Domain=\.undersland\.com/)
+  assert.match(cookie, /Path=\//)
+  assert.match(cookie, /HttpOnly/)
+  assert.match(cookie, /Secure/)
+  assert.match(cookie, /SameSite=Lax/)
+
+  await app.close()
+})
+
+test('Google callback keeps the development session cookie localhost-compatible', async () => {
+  const { app } = await buildGoogleCallbackApp('development')
+
+  const response = await app.inject({
+    method: 'GET',
+    url: '/sign-up/google/callback?code=test-code'
+  })
+
+  assert.equal(response.statusCode, 302)
+  assert.equal(response.headers.location, 'http://localhost:3000/')
+  const cookie = response.headers['set-cookie'] as string
+  assert.doesNotMatch(cookie, /Domain=/)
+  assert.doesNotMatch(cookie, /; Secure/)
+  assert.match(cookie, /HttpOnly/)
+  assert.match(cookie, /SameSite=Lax/)
+  assert.match(cookie, /Path=\//)
+
+  await app.close()
+})
+
+test('Google callback redirects failures with only a safe error code', async () => {
+  const { app } = await buildGoogleCallbackApp('production')
+
+  const response = await app.inject({
+    method: 'GET',
+    url: '/sign-up/google/callback?error=access_denied&error_description=private-provider-detail'
+  })
+
+  assert.equal(response.statusCode, 302)
+  assert.equal(
+    response.headers.location,
+    'https://www.undersland.com/login?error=oauth_denied'
+  )
+  assert.doesNotMatch(
+    response.headers.location ?? '',
+    /private-provider-detail/
+  )
+
+  await app.close()
+})
+
+test('Google callback session signature is accepted by authenticated routes', async () => {
+  const { app } = await buildGoogleCallbackApp('production')
+  const callbackResponse = await app.inject({
+    method: 'GET',
+    url: '/sign-up/google/callback?code=test-code'
+  })
+  const sessionCookie = (
+    callbackResponse.headers['set-cookie'] as string
+  ).split(';', 1)[0]
+  assert.ok(sessionCookie)
+  const sessionValue = sessionCookie.slice('understand-session='.length)
+  const signatureSeparator = sessionValue.lastIndexOf('.')
+  assert.notEqual(signatureSeparator, -1)
+  const payload = sessionValue.slice(0, signatureSeparator)
+  const signature = sessionValue.slice(signatureSeparator + 1)
+  assert.equal(
+    signature,
+    createHmac('sha256', sessionSecret).update(payload).digest('base64url')
+  )
+
+  const response = await app.inject({
+    method: 'GET',
+    url: '/me',
+    headers: { cookie: sessionCookie }
+  })
+
+  assert.equal(response.statusCode, 404)
 
   await app.close()
 })
