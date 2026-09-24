@@ -1,5 +1,6 @@
 services:
   mongodb:
+    restart: unless-stopped
     image: mongo:latest
     container_name: mongodb
     ports:
