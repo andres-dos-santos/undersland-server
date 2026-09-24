@@ -17,12 +17,14 @@ services:
         condition: service_healthy
 
   api:
-    build: .
+    build:
+      context: .
+      target: ${NODE_ENV:-development}
     restart: unless-stopped
     env_file:
-      - .env.production
+      - .env.${NODE_ENV:-development}
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-development}
       HOST: 0.0.0.0
       PORT: 3000
       MONGODB_HOST: mongodb
