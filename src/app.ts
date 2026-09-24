@@ -143,6 +143,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
   }
 
+  app.get('/health', async () => ({ status: 'ok' }))
+
   if (googleClientId && googleClientSecret) {
     const callbackUrl =
       options.googleCallbackUrl ??

@@ -95,6 +95,19 @@ function createMongoClient(
   }
 }
 
+test('GET /health reports that the service is healthy', async () => {
+  const mongo = createMongoClient([])
+  const app = await buildApp({ logger: false, mongoClient: mongo.client })
+
+  const response = await app.inject({ method: 'GET', url: '/health' })
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json(), { status: 'ok' })
+  assert.equal(mongo.state().collectionName, undefined)
+
+  await app.close()
+})
+
 test('GET /me returns the authenticated user', async () => {
   const user = {
     _id: new ObjectId(),
