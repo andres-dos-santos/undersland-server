@@ -115,6 +115,41 @@ test('GET /health reports that the service is healthy', async () => {
   await app.close()
 })
 
+test('POST /sign-out expires the session cookie', async () => {
+  const mongo = createMongoClient([])
+  const app = await buildApp({ logger: false, mongoClient: mongo.client })
+
+  const response = await app.inject({ method: 'POST', url: '/sign-out' })
+
+  assert.equal(response.statusCode, 204)
+  assert.equal(
+    response.headers['set-cookie'],
+    'understand-session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'
+  )
+  assert.equal(response.body, '')
+
+  await app.close()
+})
+
+test('POST /sign-out expires the production session cookie for the shared domain', async () => {
+  const mongo = createMongoClient([])
+  const app = await buildApp({
+    logger: false,
+    mongoClient: mongo.client,
+    nodeEnv: 'production'
+  })
+
+  const response = await app.inject({ method: 'POST', url: '/sign-out' })
+
+  assert.equal(response.statusCode, 204)
+  assert.equal(
+    response.headers['set-cookie'],
+    'understand-session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Domain=.undersland.com; Secure'
+  )
+
+  await app.close()
+})
+
 test('GET /me returns the authenticated user', async () => {
   const user = {
     _id: new ObjectId(),

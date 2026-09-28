@@ -169,6 +169,20 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
   app.get('/health', async () => ({ status: 'ok' }))
 
+  app.post('/sign-out', async (_request, reply) => {
+    const productionAttributes = isProduction
+      ? '; Domain=.undersland.com; Secure'
+      : ''
+
+    return reply
+      .header(
+        'set-cookie',
+        `understand-session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${productionAttributes}`
+      )
+      .status(204)
+      .send()
+  })
+
   if (googleClientId && googleClientSecret) {
     const callbackUrl =
       options.googleCallbackUrl ??
