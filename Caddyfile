@@ -8,5 +8,8 @@
 		-Server
 	}
 
+	@mongoExpress path /mongo /mongo/*
+	reverse_proxy @mongoExpress mongo-express:8081
+
 	reverse_proxy api:3000
 }
