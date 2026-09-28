@@ -74,11 +74,7 @@ services:
     image: mongo-express:1.0.2-20-alpine3.19
     restart: unless-stopped
     environment:
-      ME_CONFIG_MONGODB_SERVER: mongodb
-      ME_CONFIG_MONGODB_PORT: 27017
-      ME_CONFIG_MONGODB_ENABLE_ADMIN: "true"
-      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGODB_USERNAME:?Set MONGODB_USERNAME in .env}
-      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGODB_PASSWORD:?Set MONGODB_PASSWORD in .env}
+      ME_CONFIG_MONGODB_URL: mongodb://${MONGODB_USERNAME:?Set MONGODB_USERNAME in .env}:${MONGODB_PASSWORD_URLENCODED:?Set MONGODB_PASSWORD_URLENCODED in .env}@mongodb:27017/?authSource=admin
       ME_CONFIG_BASICAUTH_ENABLED: "true"
       ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USERNAME:?Set MONGO_EXPRESS_USERNAME in .env}
       ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASSWORD:?Set MONGO_EXPRESS_PASSWORD in .env}
@@ -90,7 +86,6 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
-    init: true
     security_opt:
       - no-new-privileges:true
 
