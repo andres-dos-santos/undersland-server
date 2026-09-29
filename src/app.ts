@@ -33,6 +33,7 @@ interface BuildAppOptions {
   googleCallbackUrl?: string
   frontendUrl?: string
   sessionSecret?: string
+  sessionCookieDomain?: string
   nodeEnv?: string
   googleAccessTokenProvider?: (
     request: FastifyRequest,
@@ -155,6 +156,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const sessionSecret = options.sessionSecret ?? process.env.SESSION_SECRET
   const isProduction =
     (options.nodeEnv ?? process.env.NODE_ENV) === 'production'
+  const sessionCookieDomain =
+    options.sessionCookieDomain ??
+    process.env.SESSION_COOKIE_DOMAIN ??
+    '.undersland.com'
+  const productionCookieAttributes = isProduction
+    ? `; Domain=${sessionCookieDomain}; Secure`
+    : ''
   const requireAuthentication = async (
     request: FastifyRequest,
     reply: FastifyReply
@@ -170,14 +178,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.get('/health', async () => ({ status: 'ok' }))
 
   app.post('/sign-out', async (_request, reply) => {
-    const productionAttributes = isProduction
-      ? '; Domain=.undersland.com; Secure'
-      : ''
-
     return reply
       .header(
         'set-cookie',
-        `understand-session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${productionAttributes}`
+        `understand-session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${productionCookieAttributes}`
       )
       .status(204)
       .send()
@@ -299,13 +303,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
         const sessionSignature = createHmac('sha256', sessionSecret)
           .update(sessionPayload)
           .digest('base64url')
-        const productionAttributes = isProduction
-          ? '; Domain=.undersland.com; Secure'
-          : ''
-
         reply.header(
           'set-cookie',
-          `understand-session=${sessionPayload}.${sessionSignature}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${productionAttributes}`
+          `understand-session=${sessionPayload}.${sessionSignature}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${productionCookieAttributes}`
         )
 
         return reply.redirect(new URL('/', frontendUrl).toString())
