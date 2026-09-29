@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit",
     "check": "biome check .",
     "format": "biome format --write .",
-    "docker:restart": "NODE_ENV=production docker compose up --detach --build --force-recreate --remove-orphans --wait && docker compose ps"
+    "docker:restart": "docker compose --env-file .env.production up --detach --build --force-recreate --remove-orphans --wait && docker compose --env-file .env.production ps"
   },
   "dependencies": {
     "@fastify/oauth2": "^8.3.0",
