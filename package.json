@@ -10,7 +10,8 @@
     "test": "tsx --test",
     "typecheck": "tsc --noEmit",
     "check": "biome check .",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "docker:restart": "NODE_ENV=production docker compose up --detach --build --force-recreate --remove-orphans --wait && docker compose ps"
   },
   "dependencies": {
     "@fastify/oauth2": "^8.3.0",
